@@ -152,26 +152,53 @@ GCSE %>%
   summarise(count  = n()) %>% 
   arrange(count) %>% 
   slice(1:10)
-  
+ 
+GCSE %>% 
+  group_by(school) %>% 
+  summarise(count  = n()) %>% 
+  arrange(desc(count)) %>% 
+  slice(1:10) 
 ```
 
 ```{r}
 theta_simsComp <- as.matrix(mod1,
-                        regex_pars ="b\\[\\(Intercept\\) school\\:(25241|22908)")
+                        regex_pars ="b\\[\\(Intercept\\) school\\:(60421|68417)")
 ```
+
+
+```{r}
+GCSE %>% 
+  filter(school %in% c(60421,68417)) %>% 
+  group_by(school) %>% 
+  summarise(mean_score = mean(course, na.rm=T), .groups="drop")
+```
+
+```{r}
+apply(theta_simsComp + as.numeric(mu_theta_sims), 2, mean)
+```
+
 
 ```{r}
 print(paste("Posterior mean difference of average scores =  = ", round(mean(theta_simsComp[,1] - theta_simsComp[,2]),4)))
 
 CI <- quantile(round(theta_simsComp[,1] - theta_simsComp[,2],4), c(0.025, .975))
-print(paste("95% CI = ", '[',  str_c(CI, sep=","), ']'))
+print(paste("95% CI = ", '[',  str_c(CI, collapse=","), ']'))
 
 data.frame(diff = theta_simsComp[,1] - theta_simsComp[,2]) %>% 
   ggplot(aes(x=diff)) +
   geom_histogram(binwidth = 2, fill = "#3182bd", alpha=.7) +
   theme_classic() +
-  labs(x="Difference in posterior means for 25242 and 22908")
+  labs(x="Difference in posterior means for 60421 and 68417")
 ```
+
+
+
+For the school with the smaller sample size, it looks like it was almost compeletly shrunk to the global mean.
+The school with th larger sample size differs more from the global mean. The differences between the school
+averages are on average smaller than the difference between their sample average and as we can see from the histogram 
+there is a high density around 0 for the the difference of their averages.
+
+
 
 ```{r}
 mod2 <- stan_lmer(formula = course ~ 1 + female + (1 | school),
@@ -319,7 +346,18 @@ for (i in 1:18){
 
 # Exercise 5
 
+The red line represents the pooled model it represents one intercept and a fixed slope. It does not change across schools.
+The blue line represents our second model, which has a varying intercept (by scools) but fixed slope. Therefore, as we 
+can see, the blue line is parallel the red line and deviates by a constant. The green line represents the hierarchical 
+model where the slope varies. In this case the green line is close to the blue line, but there is a pulling effect
+that is stronger for schools with small sample sizes. For these schools the intercept gets pulled to the global mean
+and we can see in the plot that for schools with small samples sizes the green line lies between the red and blue line.
+The yellow line represents our varying slope varying intercept model. The slope of the line changes for each school
+and again there is a pulling effect that will shift lines representing schools with small sizes from the blue line to 
+the level of the red line.
 
+According to the model comparison I would recommend model 3, which has the varying slope and intercept with a single 
+predictor as it seems to have the highest likelihood.
 
 
 
@@ -332,12 +370,105 @@ radon$county <- as.factor(radon$county)
 
 # Exercise 6
 
-```{r ex1, fig.height=4, fig.width=6}
+```{r ex6, fig.height=4, fig.width=6}
 radon %>% 
   group_by(county) %>% 
-  summarise(mean_radon = mean(log_radon)) %>% 
+  summarise(mean_radon = mean(log_radon), 
+            .groups = "drop") %>% 
   ggplot(aes(x=mean_radon)) +
   geom_histogram(binwidth = .05, fill = "#3182bd", alpha=.7) +
   theme_classic() +
   labs(x="Sample Means")
 ```
+
+
+The samples means of log radon across counties are spead out between 0 and 3, indicating the the means of radon are different across 
+counties (especially considering this is the log of radon).
+
+
+# Exercise 7
+
+```{r}
+radon.unpooled <- stan_glm(log_radon ~ -1 + county ,data=radon, refresh = 0)
+```
+
+```{r}
+radon.mod1 <- stan_lmer(formula = log_radon ~ 1 + (1 | county),
+                  data = radon,
+                  seed = 349,
+                  refresh = 0)
+```
+
+
+```{r exercise 7}
+n_county <- as.numeric(table(radon$county))
+create_df <- function(sim,model){
+  mean <- apply(sim,2,mean)
+  sd <- apply(sim,2,sd)
+  df <- cbind(n_county, mean, sd) %>%
+    as.data.frame()%>%
+    mutate(se = sd/ sqrt(n_county), model = model)
+  return(df)
+}
+
+unpooled.sim <- as.matrix(radon.unpooled)
+unpooled.df <- create_df(unpooled.sim[,1:85], model = "unpooled")
+
+
+mod1.sim <- as.matrix(radon.mod1)[,1:86]
+mod1.sim <- (mod1.sim[,1] + mod1.sim)[,-1]
+partial.df <- create_df(mod1.sim, model = "partial")
+
+ggplot(rbind(unpooled.df, partial.df)%>% mutate(model = factor(model, levels = c("unpooled", "partial"))), aes(x= n_county, y = mean)) +
+   #draws the means
+      geom_jitter() +
+   #draws the CI error bars
+      geom_errorbar(aes(ymin=mean-2*se, ymax= mean+2*se), width=.1)+
+  ylim(0,3)+
+  xlim(0,60)+
+  geom_hline(aes(yintercept= mean(coef(radon.unpooled))))+
+  facet_wrap(~model)
+```
+
+
+
+# Exercise 8
+
+```{r}
+radon.mod2 <- stan_lmer(formula = log_radon ~ 1 + floor + (1 | county),
+                  data = radon,
+                  seed = 349,
+                  refresh = 0)
+```
+
+```{r}
+radon.mod3 <- stan_lmer(formula = log_radon ~ 1 + floor + (1 + floor | county),
+                  data = radon, 
+                  seed = 349,
+                  refresh = 0)
+```
+
+
+```{r}
+radon.mod4 <- stan_lmer(formula = log_radon ~ 1 + floor + log_uranium + (1 | county),
+                  data = radon,
+                  seed = 349,
+                  refresh = 0)
+```
+
+Comparing all 5 models
+
+```{r}
+loo1 <- loo(radon.unpooled)
+loo2 <- loo(radon.mod1)
+loo3 <- loo(radon.mod2)
+loo4 <- loo(radon.mod3)
+loo5 <- loo(radon.mod4)
+```
+
+```{r}
+loo_compare(loo1,loo2,loo3,loo4,loo5)
+```
+
+According to our comparison the last model we fit with the varying slope by counties and 
+floor / log uranium covariates has the highest likelihood and shown to be the best.
