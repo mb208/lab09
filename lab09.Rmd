@@ -1,0 +1,320 @@
+---
+title: "Lab09"
+author: "Marc Brooks"
+date: "11/2/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = F, warning = F)
+```
+
+
+```{r packages}
+library(tidyverse)
+library(rstanarm)
+library(magrittr)
+library(ggplot2)
+library(mlmRev)
+library(tidybayes)
+library(ggstance)
+library(dplyr)
+library(modelr)
+```
+
+
+
+
+```{r}
+data(Gcsemv, package = "mlmRev")
+dim(Gcsemv)
+
+summary(Gcsemv)
+
+
+# Make Male the reference category and rename variable
+Gcsemv$female <- relevel(Gcsemv$gender, "M")
+
+# Use only total score on coursework paper
+GCSE <- subset(x = Gcsemv,
+               select = c(school, student, female, course))
+
+# Count unique schools and students
+m <- length(unique(GCSE$school))
+N <- nrow(GCSE)
+```
+
+# Exercise 1
+
+```{r ex1, fig.height=4, fig.width=6}
+GCSE %>% 
+  group_by(school) %>% 
+  summarise(mean_score = mean(course)) %>% 
+  ggplot(aes(x=mean_score)) +
+  geom_histogram(binwidth = 2, fill = "#3182bd", alpha=.7) +
+  theme_classic() +
+  labs(x="Sample Means")
+```
+
+
+```{r}
+pooled <- stan_glm(course ~ 1 + female, data = GCSE, refresh = 0)
+unpooled <- stan_glm(course ~ -1 + school + female,data=GCSE, refresh = 0)
+```
+
+```{r}
+mod1 <- stan_lmer(formula = course ~ 1 + (1 | school),
+                  data = GCSE,
+                  seed = 349,
+                  refresh = 0)
+```
+
+```{r}
+summary(mod1,
+        pars = c("(Intercept)", "sigma", "Sigma[school:(Intercept),(Intercept)]"),
+        probs = c(0.025, 0.975),
+        digits = 3)
+```
+
+# Exercise 2
+
+The posterior mean for $\mu_{\theta}$ is 73.704 and the 95% Credible Interval is $[71.531, 75.935]$.
+The posterior mean for $\sigma$ is 13.816 and the 95% Credible Interval is $[13.351, 14.308]$.
+The posterior mean for $\tau^2$ is 79.674 and he 95% Credible Interval is $[54.390, 115.156]$.
+
+
+```{r}
+mod1_sims <- as.matrix(mod1)
+dim(mod1_sims)
+```
+
+```{r}
+par_names <- colnames(mod1_sims)
+head(par_names)
+```
+
+
+```{r}
+tail(par_names)
+```
+
+```{r}
+# obtain draws for mu_theta
+mu_theta_sims <- as.matrix(mod1, pars = "(Intercept)")
+```
+
+```{r}
+# obtain draws for each school's contribution to intercept
+theta_sims <- as.matrix(mod1,
+                        regex_pars ="b\\[\\(Intercept\\) school\\:")
+```
+
+
+```{r}
+# to finish: obtain draws for sigma and tau^2
+sig_sims <- as.matrix(mod1,
+                      pars = "sigma")
+tau2_sims <- as.matrix(mod1,
+                       pars = "Sigma[school:(Intercept),(Intercept)]")
+```
+
+```{r}
+int_sims <- as.numeric(mu_theta_sims) + theta_sims
+
+# posterior mean
+int_mean <- apply(int_sims, MARGIN = 2, FUN = mean)
+
+# credible interval
+int_ci <- apply(int_sims, MARGIN = 2, FUN = quantile, probs = c(0.025, 0.975))
+int_ci <- data.frame(t(int_ci))
+
+# combine into a single df
+int_df <- data.frame(int_mean, int_ci)
+names(int_df) <- c("post_mean","Q2.5", "Q97.5")
+
+# sort DF according to posterior mean
+int_df <- int_df[order(int_df$post_mean),]
+
+# create variable "index" to represent order
+int_df <- int_df %>% mutate(index = row_number())
+
+# plot posterior means of school-varying intercepts, along with 95 CIs
+ggplot(data = int_df, aes(x = index, y = post_mean))+
+  geom_pointrange(aes(ymin = Q2.5, ymax = Q97.5))+
+  scale_x_continuous("Index", breaks = seq(0,m, 5)) +
+  scale_y_continuous(expression(paste("varying intercept ", theta[j])))
+```
+
+Let's look at two schools with small sample sizes.
+```{r}
+GCSE %>% 
+  group_by(school) %>% 
+  summarise(count  = n()) %>% 
+  arrange(count) %>% 
+  slice(1:10)
+  
+```
+
+```{r}
+theta_simsComp <- as.matrix(mod1,
+                        regex_pars ="b\\[\\(Intercept\\) school\\:(25241|22908)")
+```
+
+```{r}
+print(paste("Posterior mean difference of average scores =  = ", round(mean(theta_simsComp[,1] - theta_simsComp[,2]),4)))
+
+CI <- quantile(round(theta_simsComp[,1] - theta_simsComp[,2],4), c(0.025, .975))
+print(paste("95% CI = ", '[',  str_c(CI, sep=","), ']'))
+
+data.frame(diff = theta_simsComp[,1] - theta_simsComp[,2]) %>% 
+  ggplot(aes(x=diff)) +
+  geom_histogram(binwidth = 2, fill = "#3182bd", alpha=.7) +
+  theme_classic() +
+  labs(x="Difference in posterior means for 25242 and 22908")
+```
+
+```{r}
+mod2 <- stan_lmer(formula = course ~ 1 + female + (1 | school),
+                  data = GCSE, 
+                  prior = normal(location = 0,
+                                        scale = 100,
+                                        autoscale = F),
+                  prior_intercept = normal(location = 0,
+                                        scale = 100,
+                                        autoscale = F),
+                  seed = 349,
+                  refresh = 0)
+```
+
+```{r}
+# plot varying intercepts
+mod2.sims <- as.matrix(mod2)
+group_int <- mean(mod2.sims[,1])
+mp <- mean(mod2.sims[,2])
+bp <- apply(mod2.sims[, 3:75], 2, mean)
+xvals <- seq(0,1,.01)
+plot(x = xvals, y = rep(0, length(xvals)), 
+     ylim = c(50, 90), xlim = c(-0.1,1.1), xaxt = "n", xlab = "female", ylab = "course")
+axis(side = 1, at = c(0,1))
+for (bi in bp){
+  lines(xvals, (group_int + bi)+xvals*mp)
+}
+```
+
+# Exercise 4
+```{r}
+summary(mod2,
+        pars = c("(Intercept)", "femaleF", "sigma", "Sigma[school:(Intercept),(Intercept)]"),
+        probs = c(0.025, 0.975),
+        digits = 3)
+```
+
+The posterior mean for $\mu_{\theta}$ is 69.669 and the 95% Credible Interval is $[67.322, 72.056]$.
+The posterior mean for $\beta$ is 6.744 and the 95% Credible Interval is $[5.410, 8.043]$.
+The posterior mean for $\sigma$ is 13.424  and the 95% Credible Interval is $[12.965, 13.905]$.
+The posterior mean for $\tau^2$ is 80.663 and he 95% Credible Interval is $[54.072, 118.776]$.
+
+
+# Model 3
+
+
+```{r}
+mod3 <- stan_lmer(formula = course~ 1+ female + (1 + female | school),
+                  data = GCSE,
+                  seed = 349,
+                  refresh = 0)
+
+mod3_sims <- as.matrix(mod3)
+```
+
+
+```{r}
+# obtain draws for mu_theta
+mu_theta_sims <- as.matrix(mod3, pars = "(Intercept)")
+
+fem_sims <- as.matrix(mod3, pars = "femaleF")
+# obtain draws for each school's contribution to intercept
+theta_sims <- as.matrix(mod3,
+                        regex_pars ="b\\[\\(Intercept\\) school\\:")
+beta_sims <- as.matrix(mod3,
+                       regex_pars ="b\\[femaleF school\\:")
+
+int_sims <- as.numeric(mu_theta_sims) + theta_sims
+slope_sims <- as.numeric(fem_sims) + beta_sims
+
+# posterior mean
+slope_mean <- apply(slope_sims, MARGIN = 2, FUN = mean)
+
+# credible interval
+slope_ci <- apply(slope_sims, MARGIN = 2, FUN = quantile, probs = c(0.025, 0.975))
+slope_ci <- data.frame(t(slope_ci))
+
+# combine into a single df
+slope_df <- data.frame(slope_mean, slope_ci, levels(GCSE$school))
+names(slope_df) <- c("post_mean","Q2.5", "Q97.5", "school")
+
+# sort DF according to posterior mean
+slope_df <- slope_df[order(slope_df$post_mean),]
+
+# create variable "index" to represent order
+slope_df <- slope_df %>% mutate(index = row_number())
+
+# plot posterior means of school-varying slopes, along with 95% CIs
+ggplot(data = slope_df, aes(x = index, y = post_mean))+
+  geom_pointrange(aes(ymin = Q2.5, ymax = Q97.5))+
+  scale_x_continuous("Index", breaks = seq(1,m, 1),
+                     labels = slope_df$school) +
+  scale_y_continuous(expression(paste("varying slopes ", beta[j])))+
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+
+# Model Comparison
+
+```{r}
+loo1 <- loo(mod1)
+loo2 <- loo(mod2)
+loo3 <- loo(mod3)
+
+loo_compare(loo1,loo2,loo3)
+```
+
+```{r}
+pooled.sim <- as.matrix(pooled)
+unpooled.sim <- as.matrix(unpooled)
+m1.sim <- as.matrix(mod1)
+m2.sim <- as.matrix(mod2)
+m3.sim <- as.matrix(mod3)
+schools <- unique(GCSE$school)
+
+
+alpha2 = mean(m2.sim[,1])
+alpha3 <- mean(m3.sim[,1])
+
+partial.fem2 <- mean(m2.sim[,2])
+partial.fem3 <- mean(m3.sim[,2])
+unpooled.fem <- mean(unpooled.sim[,74])
+
+par(mfrow = c(2, 3), mar = c(1,2,2,1))
+for (i in 1:18){
+  temp = GCSE %>% filter(school == schools[i]) %>%
+    na.omit()
+  y <- temp$course
+  x <- as.numeric(temp$female)-1
+  plot(x + rnorm(length(x)) *0.001, y, ylim = c(35,101), xlab = "female",main =schools[i], xaxt = "n", ylab = "course")
+  axis(1,c(0,1),cex.axis=0.8)
+  
+  # no pooling
+  b = mean(unpooled.sim[,i])
+
+  # plot lines and data
+  xvals = seq(-0.1, 1.1, 0.01)
+  lines(xvals, xvals * mean(pooled.sim[,2]) + mean(pooled.sim[,1]), col = "red") # pooled
+  lines(xvals, xvals * unpooled.fem + b, col = "blue") # unpooled
+  lines(xvals, xvals*partial.fem2 + (alpha2 + mean(m2.sim[,i+2])) , col = "green") # varying int
+  lines(xvals, xvals*(partial.fem3 + mean(m3.sim[, 2 + i*2])) + (alpha3 + mean(m3.sim[, 1 + i*2])), col = "orange") # varying int and slope
+  legend("bottom", legend = paste("n =", length(y), " "))
+}
+```
+
+# Exercise 5
