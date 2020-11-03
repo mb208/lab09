@@ -318,3 +318,26 @@ for (i in 1:18){
 ```
 
 # Exercise 5
+
+
+
+
+
+```{r}
+radon <- read.csv("radon.txt", header = T,sep="")
+radon$county <- as.factor(radon$county)
+```
+
+
+
+# Exercise 6
+
+```{r ex1, fig.height=4, fig.width=6}
+radon %>% 
+  group_by(county) %>% 
+  summarise(mean_radon = mean(log_radon)) %>% 
+  ggplot(aes(x=mean_radon)) +
+  geom_histogram(binwidth = .05, fill = "#3182bd", alpha=.7) +
+  theme_classic() +
+  labs(x="Sample Means")
+```
